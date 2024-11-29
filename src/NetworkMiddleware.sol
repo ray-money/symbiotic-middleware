@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Create2} from "@openzeppelin/contracts/utils/Create2.sol";
+
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /** 
@@ -53,11 +55,29 @@ contract Network {
 }
 
 contract NetworkMiddleware is Ownable {
-    
+
+    INetworkRegistry public immutable networkRegistry;
+    INetworkMiddlewareService public immutable middlewareService;
+
+    event NetworkDeployed(uint32 domain, address network);
+
     IDefaultOperatorRewards public operatorRewards;
 
     constructor(IDefaultOperatorRewards _operatorRewards) Ownable(msg.sender) {
         operatorRewards = _operatorRewards;
     }
 
+    function deployNetwork(uint32 domain) external returns (address network) {
+        bytes32 salt = bytes32(uint256(domain));
+        network = Create2.deploy(0, salt, _networkBytecode());
+        emit NetworkDeployed(domain, network);
+    }
+
+    function _networkBytecode() internal view returns (bytes memory) {
+        return
+            abi.encodePacked(
+                type(Network).creationCode,
+                abi.encode(networkRegistry, middlewareService)
+            );
+    }
 }
