@@ -66,13 +66,16 @@ contract NetworkMiddleware is Ownable {
     /// @notice Service contract for coordinating network middleware functionality
     INetworkMiddlewareService public immutable middlewareService;
 
+    error UnauthorizedVault(address vault);
+    error VaultAlreadyAuthorized(address vault);
+    error VaultNotAuthorized(address vault);
+
     event NetworkDeployed(uint32 domain, address network);
     event VaultAuthorized(address vault);
     event VaultDeauthorized(address vault);
 
     /// @notice Set of authorized vaults
     EnumerableSet.AddressSet private vaults;
-
 
     /// @notice Contract for managing operator reward distributions
     IDefaultOperatorRewards public operatorRewards;
@@ -86,52 +89,93 @@ contract NetworkMiddleware is Ownable {
     /**
      * @notice Modifier to restrict access to authorized vaults only
      * @param vault The address of the vault to check authorization for
-     * @dev Reverts with "unauthorized vault" if the vault is not in the authorized vaults set
+     * @dev Reverts with UnauthorizedVault if the vault is not in the authorized vaults set
      */
     modifier onlyAuthorized(address vault) {
-        require(vaults.contains(vault), "unauthorized vault");
+        if (!vaults.contains(vault)) revert UnauthorizedVault(vault);
         _;
     }
 
+    /**
+     * @notice Adds a vault to the set of authorized vaults
+     * @param vault The address of the vault to authorize
+     * @dev Only callable by contract owner
+     * @dev Reverts with VaultAlreadyAuthorized if vault is already authorized
+     */
     function authorizeVault(address vault) external onlyOwner {
         if (vaults.contains(vault)) {
-            revert("Vault already authorized");
+            revert VaultAlreadyAuthorized(vault);
         }
 
         vaults.add(vault);
         emit VaultAuthorized(vault);
     }
 
+    /**
+     * @notice Removes a vault from the set of authorized vaults
+     * @param vault The address of the vault to deauthorize
+     * @dev Only callable by contract owner
+     * @dev Reverts with VaultNotAuthorized if vault is not currently authorized
+     */
     function deauthorizeVault(address vault) external onlyOwner {
         if (!vaults.contains(vault)) {
-            revert("Vault not authorized");
+            revert VaultNotAuthorized(vault);
         }
 
         vaults.remove(vault);
         emit VaultDeauthorized(vault);
     }
 
-    /**
-     * @notice Deploys a new Network contract for the given domain using CREATE2
-     * @param domain The domain ID for the network being deployed
-     * @return network The address of the deployed Network contract
-     */
-    function deployNetwork(uint32 domain) external returns (address network) {
-        // Convert domain to bytes32 for use as CREATE2 salt
-        bytes32 salt = bytes32(uint256(domain));
-        // Deploy new Network contract with 0 ETH value
-        network = Create2.deploy(0, salt, _networkBytecode());
-        emit NetworkDeployed(domain, network);
+    function deployNetwork() external returns (address network) {
+        network = address(new Network(networkRegistry, middlewareService));
+        emit NetworkDeployed(network);
     }
 
-    /**
-     * @notice Computes the deterministic address for a Network contract before deployment
-     * @param domain The domain ID to compute the address for
-     * @return The address where the Network contract would be deployed
-     */
-    function getNetwork(uint32 domain) public view returns (address) {
-        bytes32 salt = bytes32(uint256(domain));
-        return Create2.computeAddress(salt, keccak256(_networkBytecode()));
+    function allocateStake(
+        address vault,
+        address validator,
+        uint256 amount
+    ) external onlyOwner onlyAuthorized(vault) {
+        INetworkRestakeDelegator(IVault(vault).delegator())
+            .setOperatorNetworkShares(
+                bytes32(bytes20(address(this))),  // Using this contract's address instead
+                validator,
+                amount
+            );
+    }
+
+    function slash(
+        address vault,
+        address validator,
+        uint256 amount,
+        uint48 timestamp
+    ) external onlyOwner onlyAuthorized(vault) {
+        bytes32 network = bytes32(bytes20(address(this)));
+        ISlasher(IVault(vault).slasher()).slash(
+            network,
+            validator,
+            amount,
+            timestamp,
+            new bytes(0)
+        );
+    }
+
+    function rewardStakers(
+        IDefaultStakerRewards stakerRewards,
+        address token,
+        uint256 amount
+    ) external onlyOwner onlyAuthorized(stakerRewards.VAULT()) {
+        address network = address(this);
+        stakerRewards.distributeRewards(network, token, amount, bytes(""));
+    }
+
+    function rewardOperators(
+        address token,
+        uint256 amount,
+        bytes32 root
+    ) external onlyOwner {
+        address network = address(this);
+        operatorRewards.distributeRewards(network, token, amount, root);
     }
 
     function _networkBytecode() internal view returns (bytes memory) {
