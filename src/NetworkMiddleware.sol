@@ -73,6 +73,11 @@ contract NetworkMiddleware is Ownable {
         emit NetworkDeployed(domain, network);
     }
 
+    function getNetwork(uint32 domain) public view returns (address) {
+        bytes32 salt = bytes32(uint256(domain));
+        return Create2.computeAddress(salt, keccak256(_networkBytecode()));
+    }
+
     function _networkBytecode() internal view returns (bytes memory) {
         return
             abi.encodePacked(
