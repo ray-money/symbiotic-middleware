@@ -44,6 +44,9 @@ import {INetworkRestakeDelegator} from "@symbiotic/interfaces/delegator/INetwork
 import {IDefaultStakerRewards} from "@symbiotic-rewards/interfaces/defaultStakerRewards/IDefaultStakerRewards.sol";
 import {IDefaultOperatorRewards} from "@symbiotic-rewards/interfaces/defaultOperatorRewards/IDefaultOperatorRewards.sol";
 
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+
+
 contract Network {
     constructor(
         INetworkRegistry networkRegistry,
@@ -55,24 +58,77 @@ contract Network {
 }
 
 contract NetworkMiddleware is Ownable {
+    using EnumerableSet for EnumerableSet.AddressSet;
 
+    /// @notice Registry contract for managing network registration and status
     INetworkRegistry public immutable networkRegistry;
+    
+    /// @notice Service contract for coordinating network middleware functionality
     INetworkMiddlewareService public immutable middlewareService;
 
     event NetworkDeployed(uint32 domain, address network);
+    event VaultAuthorized(address vault);
+    event VaultDeauthorized(address vault);
 
+    /// @notice Set of authorized vaults
+    EnumerableSet.AddressSet private vaults;
+
+
+    /// @notice Contract for managing operator reward distributions
     IDefaultOperatorRewards public operatorRewards;
 
+    /// @notice Initializes the middleware contract
+    /// @param _operatorRewards Address of the operator rewards contract
     constructor(IDefaultOperatorRewards _operatorRewards) Ownable(msg.sender) {
         operatorRewards = _operatorRewards;
     }
 
+    /**
+     * @notice Modifier to restrict access to authorized vaults only
+     * @param vault The address of the vault to check authorization for
+     * @dev Reverts with "unauthorized vault" if the vault is not in the authorized vaults set
+     */
+    modifier onlyAuthorized(address vault) {
+        require(vaults.contains(vault), "unauthorized vault");
+        _;
+    }
+
+    function authorizeVault(address vault) external onlyOwner {
+        if (vaults.contains(vault)) {
+            revert("Vault already authorized");
+        }
+
+        vaults.add(vault);
+        emit VaultAuthorized(vault);
+    }
+
+    function deauthorizeVault(address vault) external onlyOwner {
+        if (!vaults.contains(vault)) {
+            revert("Vault not authorized");
+        }
+
+        vaults.remove(vault);
+        emit VaultDeauthorized(vault);
+    }
+
+    /**
+     * @notice Deploys a new Network contract for the given domain using CREATE2
+     * @param domain The domain ID for the network being deployed
+     * @return network The address of the deployed Network contract
+     */
     function deployNetwork(uint32 domain) external returns (address network) {
+        // Convert domain to bytes32 for use as CREATE2 salt
         bytes32 salt = bytes32(uint256(domain));
+        // Deploy new Network contract with 0 ETH value
         network = Create2.deploy(0, salt, _networkBytecode());
         emit NetworkDeployed(domain, network);
     }
 
+    /**
+     * @notice Computes the deterministic address for a Network contract before deployment
+     * @param domain The domain ID to compute the address for
+     * @return The address where the Network contract would be deployed
+     */
     function getNetwork(uint32 domain) public view returns (address) {
         bytes32 salt = bytes32(uint256(domain));
         return Create2.computeAddress(salt, keccak256(_networkBytecode()));
