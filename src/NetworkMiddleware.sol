@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Create2} from "@openzeppelin/contracts/utils/Create2.sol";
-
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /** 
@@ -70,7 +68,7 @@ contract NetworkMiddleware is Ownable {
     error VaultAlreadyAuthorized(address vault);
     error VaultNotAuthorized(address vault);
 
-    event NetworkDeployed(uint32 domain, address network);
+    event NetworkDeployed(address network);
     event VaultAuthorized(address vault);
     event VaultDeauthorized(address vault);
 
@@ -126,11 +124,23 @@ contract NetworkMiddleware is Ownable {
         emit VaultDeauthorized(vault);
     }
 
+    /**
+     * @notice Deploys a new Network contract instance
+     * @return network The address of the newly deployed Network contract
+     * @dev Creates new Network with networkRegistry and middlewareService
+     */
     function deployNetwork() external returns (address network) {
         network = address(new Network(networkRegistry, middlewareService));
         emit NetworkDeployed(network);
     }
 
+    /**
+     * @notice Allocates stake to a validator through a vault
+     * @param vault The vault address to allocate stake through
+     * @param validator The validator address to allocate stake to
+     * @param amount The amount of stake to allocate
+     * @dev Only callable by owner and for authorized vaults
+     */
     function allocateStake(
         address vault,
         address validator,
@@ -144,6 +154,14 @@ contract NetworkMiddleware is Ownable {
             );
     }
 
+    /**
+     * @notice Slashes a validator's stake through a vault
+     * @param vault The vault address to slash through
+     * @param validator The validator address to slash
+     * @param amount The amount to slash
+     * @param timestamp The timestamp of the slashing event
+     * @dev Only callable by owner and for authorized vaults
+     */
     function slash(
         address vault,
         address validator,
@@ -160,6 +178,13 @@ contract NetworkMiddleware is Ownable {
         );
     }
 
+    /**
+     * @notice Distributes rewards to stakers through the staker rewards contract
+     * @param stakerRewards The staker rewards contract to distribute through
+     * @param token The token address to distribute as rewards
+     * @param amount The amount of tokens to distribute
+     * @dev Only callable by owner and for authorized vaults
+     */
     function rewardStakers(
         IDefaultStakerRewards stakerRewards,
         address token,
@@ -169,6 +194,13 @@ contract NetworkMiddleware is Ownable {
         stakerRewards.distributeRewards(network, token, amount, bytes(""));
     }
 
+    /**
+     * @notice Distributes rewards to operators
+     * @param token The token address to distribute as rewards
+     * @param amount The amount of tokens to distribute
+     * @param root The merkle root for reward distribution
+     * @dev Only callable by owner
+     */
     function rewardOperators(
         address token,
         uint256 amount,
@@ -176,13 +208,5 @@ contract NetworkMiddleware is Ownable {
     ) external onlyOwner {
         address network = address(this);
         operatorRewards.distributeRewards(network, token, amount, root);
-    }
-
-    function _networkBytecode() internal view returns (bytes memory) {
-        return
-            abi.encodePacked(
-                type(Network).creationCode,
-                abi.encode(networkRegistry, middlewareService)
-            );
     }
 }
